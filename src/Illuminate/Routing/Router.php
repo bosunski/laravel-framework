@@ -20,6 +20,7 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Traits\Macroable;
 use JsonSerializable;
 use Psr\Http\Message\ResponseInterface as PsrResponseInterface;
+use React\Promise\PromiseInterface;
 use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
@@ -745,7 +746,13 @@ class Router implements BindingRegistrar, RegistrarContract
                     is_array($response))) {
             $response = new JsonResponse($response);
         } elseif (! $response instanceof SymfonyResponse) {
-            $response = new Response($response);
+            if ($response instanceof PromiseInterface) {
+                return $response->then(function ($response) use ($request) {
+                    return static::toResponse($request, $response);
+                });
+            } else {
+                $response = new Response($response);
+            }
         }
 
         if ($response->getStatusCode() === Response::HTTP_NOT_MODIFIED) {

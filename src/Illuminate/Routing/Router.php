@@ -746,13 +746,7 @@ class Router implements BindingRegistrar, RegistrarContract
                     is_array($response))) {
             $response = new JsonResponse($response);
         } elseif (! $response instanceof SymfonyResponse) {
-            if ($response instanceof PromiseInterface) {
-                return $response->then(function ($response) use ($request) {
-                    return static::toResponse($request, $response);
-                });
-            } else {
-                $response = new Response($response);
-            }
+            $response = new Response($response);
         }
 
         if ($response->getStatusCode() === Response::HTTP_NOT_MODIFIED) {

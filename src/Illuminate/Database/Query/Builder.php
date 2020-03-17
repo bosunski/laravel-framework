@@ -18,7 +18,11 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Traits\ForwardsCalls;
 use Illuminate\Support\Traits\Macroable;
 use InvalidArgumentException;
+use React\MySQL\QueryResult;
+use React\Promise\Promise;
+use React\Promise\PromiseInterface;
 use RuntimeException;
+use function React\Promise\resolve;
 
 class Builder
 {
@@ -2120,19 +2124,21 @@ class Builder
      * Execute the query as a "select" statement.
      *
      * @param  array|string  $columns
-     * @return \Illuminate\Support\Collection
+     * @return Collection|PromiseInterface<Collection>
      */
     public function get($columns = ['*'])
     {
-        return collect($this->onceWithColumns(Arr::wrap($columns), function () {
-            return $this->processor->processSelect($this, $this->runSelect());
-        }));
+        return $this->runSelect()->then(function(QueryResult $result) use ($columns) {
+            return collect($this->onceWithColumns(Arr::wrap($columns), function () use($result) {
+                return $this->processor->processSelect($this, $result->resultRows);
+            }));
+        });
     }
 
     /**
      * Run the query as a "select" statement against the connection.
      *
-     * @return array
+     * @return PromiseInterface<array>
      */
     protected function runSelect()
     {
@@ -2294,20 +2300,22 @@ class Builder
             }
         );
 
-        if (empty($queryResult)) {
-            return collect();
-        }
+        return $queryResult->then(function (QueryResult $queryResult) use ($key, $column) {
+            if (empty($queryResult->resultRows)) {
+                return collect();
+            }
 
-        // If the columns are qualified with a table or have an alias, we cannot use
-        // those directly in the "pluck" operations since the results from the DB
-        // are only keyed by the column itself. We'll strip the table out here.
-        $column = $this->stripTableForPluck($column);
+            // If the columns are qualified with a table or have an alias, we cannot use
+            // those directly in the "pluck" operations since the results from the DB
+            // are only keyed by the column itself. We'll strip the table out here.
+            $column = $this->stripTableForPluck($column);
 
-        $key = $this->stripTableForPluck($key);
+            $key = $this->stripTableForPluck($key);
 
-        return is_array($queryResult[0])
-                    ? $this->pluckFromArrayColumn($queryResult, $column, $key)
-                    : $this->pluckFromObjectColumn($queryResult, $column, $key);
+            return is_array($queryResult->resultRows[0])
+                ? $this->pluckFromArrayColumn($queryResult->resultRows, $column, $key)
+                : $this->pluckFromObjectColumn($queryResult->resultRows, $column, $key);
+        });
     }
 
     /**

@@ -1,4 +1,4 @@
-<?php
+<?php /** @noinspection PhpUnnecessaryFullyQualifiedNameInspection */
 
 namespace Illuminate\Database\Eloquent;
 
@@ -13,6 +13,12 @@ use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use Illuminate\Support\Traits\ForwardsCalls;
+use React\MySQL\QueryResult;
+use React\Promise\Deferred;
+use React\Promise\Promise;
+use React\Promise\PromiseInterface;
+use function React\Promise\all;
+use function React\Promise\resolve;
 
 /**
  * @property-read HigherOrderBuilderProxy $orWhere
@@ -33,7 +39,7 @@ class Builder
     /**
      * The model being queried.
      *
-     * @var \Illuminate\Database\Eloquent\Model
+     * @var Model
      */
     protected $model;
 
@@ -223,7 +229,7 @@ class Builder
     public function where($column, $operator = null, $value = null, $boolean = 'and')
     {
         if ($column instanceof Closure) {
-            $column($query = $this->model->newQueryWithoutRelationships());
+            $column($query = $this->model->newModelQuery());
 
             $this->query->addNestedWhereQuery($query->getQuery(), $boolean);
         } else {
@@ -288,7 +294,7 @@ class Builder
      * Create a collection of models from plain arrays.
      *
      * @param  array  $items
-     * @return \Illuminate\Database\Eloquent\Collection
+     * @return Collection
      */
     public function hydrate(array $items)
     {
@@ -304,7 +310,7 @@ class Builder
      *
      * @param  string  $query
      * @param  array  $bindings
-     * @return \Illuminate\Database\Eloquent\Collection
+     * @return Collection
      */
     public function fromQuery($query, $bindings = [])
     {
@@ -316,9 +322,9 @@ class Builder
     /**
      * Find a model by its primary key.
      *
-     * @param  mixed  $id
-     * @param  array  $columns
-     * @return \Illuminate\Database\Eloquent\Model|\Illuminate\Database\Eloquent\Collection|static[]|static|null
+     * @param mixed $id
+     * @param array $columns
+     * @return Collection|PromiseInterface
      */
     public function find($id, $columns = ['*'])
     {
@@ -334,14 +340,14 @@ class Builder
      *
      * @param  \Illuminate\Contracts\Support\Arrayable|array  $ids
      * @param  array  $columns
-     * @return \Illuminate\Database\Eloquent\Collection
+     * @return PromiseInterface<Collection>
      */
     public function findMany($ids, $columns = ['*'])
     {
         $ids = $ids instanceof Arrayable ? $ids->toArray() : $ids;
 
         if (empty($ids)) {
-            return $this->model->newCollection();
+            return resolve($this->model->newCollection());
         }
 
         return $this->whereKey($ids)->get($columns);
@@ -352,25 +358,27 @@ class Builder
      *
      * @param  mixed  $id
      * @param  array  $columns
-     * @return \Illuminate\Database\Eloquent\Model|\Illuminate\Database\Eloquent\Collection|static|static[]
+     * @return PromiseInterface <Model|Collection|static|static[]>
      *
-     * @throws \Illuminate\Database\Eloquent\ModelNotFoundException
+     * @throws ModelNotFoundException
      */
     public function findOrFail($id, $columns = ['*'])
     {
-        $result = $this->find($id, $columns);
+        return new Promise(function($resolve, $reject) use ($columns, $id) {
+            $this->find($id, $columns)->then(function ($result) use ($resolve, $reject, $id) {
+                if (is_array($id)) {
+                    if (count($result) === count(array_unique($id))) {
+                        $resolve($result);
+                    }
+                } elseif (! is_null($result)) {
+                    $resolve($result);
+                }
 
-        if (is_array($id)) {
-            if (count($result) === count(array_unique($id))) {
-                return $result;
-            }
-        } elseif (! is_null($result)) {
-            return $result;
-        }
-
-        throw (new ModelNotFoundException)->setModel(
-            get_class($this->model), $id
-        );
+                $reject(new ModelNotFoundException)->setModel(
+                    get_class($this->model), $id
+                );
+            });
+        });
     }
 
     /**
@@ -378,7 +386,7 @@ class Builder
      *
      * @param  mixed  $id
      * @param  array  $columns
-     * @return \Illuminate\Database\Eloquent\Model|static
+     * @return PromiseInterface<Model|static>
      */
     public function findOrNew($id, $columns = ['*'])
     {
@@ -386,7 +394,7 @@ class Builder
             return $model;
         }
 
-        return $this->newModelInstance();
+        return resolve($this->newModelInstance());
     }
 
     /**
@@ -394,15 +402,15 @@ class Builder
      *
      * @param  array  $attributes
      * @param  array  $values
-     * @return \Illuminate\Database\Eloquent\Model|static
+     * @return PromiseInterface<Model|static>
      */
-    public function firstOrNew(array $attributes, array $values = [])
+    public function firstOrNew(array $attributes = [], array $values = [])
     {
         if (! is_null($instance = $this->where($attributes)->first())) {
             return $instance;
         }
 
-        return $this->newModelInstance($attributes + $values);
+        return resolve($this->newModelInstance($attributes + $values));
     }
 
     /**
@@ -410,7 +418,7 @@ class Builder
      *
      * @param  array  $attributes
      * @param  array  $values
-     * @return \Illuminate\Database\Eloquent\Model|static
+     * @return PromiseInterface<Model|static>
      */
     public function firstOrCreate(array $attributes, array $values = [])
     {
@@ -418,9 +426,9 @@ class Builder
             return $instance;
         }
 
-        return tap($this->newModelInstance($attributes + $values), function ($instance) {
+        return resolve(tap($this->newModelInstance($attributes + $values), function ($instance) {
             $instance->save();
-        });
+        }));
     }
 
     /**
@@ -428,12 +436,14 @@ class Builder
      *
      * @param  array  $attributes
      * @param  array  $values
-     * @return \Illuminate\Database\Eloquent\Model|static
+     * @return Model|static
      */
     public function updateOrCreate(array $attributes, array $values = [])
     {
-        return tap($this->firstOrNew($attributes), function ($instance) use ($values) {
-            $instance->fill($values)->save();
+        return tap($this->firstOrNew($attributes), function (PromiseInterface $instance) use ($values) {
+            $instance->then(function ($instance) use ($values) {
+                $instance->fill($values)->save();
+            });
         });
     }
 
@@ -441,17 +451,21 @@ class Builder
      * Execute the query and get the first result or throw an exception.
      *
      * @param  array  $columns
-     * @return \Illuminate\Database\Eloquent\Model|static
+     * @return PromiseInterface<Model|static>
      *
-     * @throws \Illuminate\Database\Eloquent\ModelNotFoundException
+     * @throws ModelNotFoundException
      */
     public function firstOrFail($columns = ['*'])
     {
-        if (! is_null($model = $this->first($columns))) {
-            return $model;
-        }
+        return new Promise(function($resolve, $reject) use ($columns) {
+            $this->first($columns)->then(function ($model) use ($resolve, $reject) {
+                if (! is_null($model)) {
+                    $resolve($model);
+                }
 
-        throw (new ModelNotFoundException)->setModel(get_class($this->model));
+                $reject((new ModelNotFoundException)->setModel(get_class($this->model)));
+            });
+        });
     }
 
     /**
@@ -459,7 +473,7 @@ class Builder
      *
      * @param  \Closure|array  $columns
      * @param  \Closure|null  $callback
-     * @return \Illuminate\Database\Eloquent\Model|static|mixed
+     * @return PromiseInterface<Model|static|mixed>
      */
     public function firstOr($columns = ['*'], Closure $callback = null)
     {
@@ -469,77 +483,91 @@ class Builder
             $columns = ['*'];
         }
 
-        if (! is_null($model = $this->first($columns))) {
-            return $model;
-        }
+        return $this->first($columns)->then(function($model) use ($callback, $columns) {
+            if (! is_null($model)) {
+                return $model;
+            }
 
-        return $callback();
+            return $callback();
+        });
     }
 
     /**
      * Get a single column's value from the first result of a query.
      *
      * @param  string  $column
-     * @return mixed
+     * @return PromiseInterface<mixed>
      */
     public function value($column)
     {
-        if ($result = $this->first([$column])) {
-            return $result->{$column};
-        }
+        return $this->first([$column])->then(function ($result) {
+            if ($result) {
+                return $result->{$column};
+            }
+        });
     }
 
     /**
      * Execute the query as a "select" statement.
      *
      * @param  array  $columns
-     * @return \Illuminate\Database\Eloquent\Collection|static[]
+     * @return PromiseInterface<Collection>
      */
     public function get($columns = ['*'])
     {
         $builder = $this->applyScopes();
 
-        // If we actually found models we will also eager load any relationships that
-        // have been specified as needing to be eager loaded, which will solve the
-        // n+1 query issue for the developers to avoid running a lot of queries.
-        if (count($models = $builder->getModels($columns)) > 0) {
-            $models = $builder->eagerLoadRelations($models);
-        }
-
-        return $builder->getModel()->newCollection($models);
+        return new Promise(function ($resolve, $reject) use ($columns, $builder) {
+            $builder->getModels($columns)->then(function ($models) use ($resolve, $columns, $builder) {
+                // If we actually found models we will also eager load any relationships that
+                // have been specified as needing to be eager loaded, which will solve the
+                // n+1 query issue for the developers to avoid running a lot of queries.
+                if (count($models) > 0) {
+                    $builder->eagerLoadRelations($models)->then(function($models) use ($resolve, $builder) {
+                        $resolve($builder->getModel()->newCollection($models));
+                    });
+                } else {
+                    $resolve($builder->getModel()->newCollection($models));
+                }
+            }, function($e) use ($reject) {
+                $reject($e);
+            });
+        });
     }
 
     /**
      * Get the hydrated models without eager loading.
      *
      * @param  array  $columns
-     * @return \Illuminate\Database\Eloquent\Model[]|static[]
+     * @return Builder[]|Model[]|Promise<Model[]>
      */
     public function getModels($columns = ['*'])
     {
-        return $this->model->hydrate(
-            $this->query->get($columns)->all()
-        )->all();
+        return $this->query->get($columns)->then(function (\Illuminate\Support\Collection $collection) {
+            return $this->model->hydrate($collection->all())->all();
+        });
     }
 
     /**
      * Eager load the relationships for the models.
      *
      * @param  array  $models
-     * @return array
+     * @return PromiseInterface<array>
      */
     public function eagerLoadRelations(array $models)
     {
-        foreach ($this->eagerLoad as $name => $constraints) {
-            // For nested eager loads we'll skip loading them here and they will be set as an
-            // eager load on the query to retrieve the relation so that they will be eager
-            // loaded on that query, because that is where they get hydrated as models.
-            if (strpos($name, '.') === false) {
-                $models = $this->eagerLoadRelation($models, $name, $constraints);
+        return new Promise(function ($resolve, $reject) use ($models) {
+            foreach ($this->eagerLoad as $name => $constraints) {
+                // For nested eager loads we'll skip loading them here and they will be set as an
+                // eager load on the query to retrieve the relation so that they will be eager
+                // loaded on that query, because that is where they get hydrated as models.
+                if (strpos($name, '.') === false) {
+                    $models[] = $this->eagerLoadRelation($models, $name, $constraints);
+                }
             }
-        }
 
-        return $models;
+            $resolve(all($models));
+        });
     }
 
     /**
@@ -548,7 +576,7 @@ class Builder
      * @param  array  $models
      * @param  string  $name
      * @param  \Closure  $constraints
-     * @return array
+     * @return PromiseInterface<array>
      */
     protected function eagerLoadRelation(array $models, $name, Closure $constraints)
     {
@@ -561,13 +589,15 @@ class Builder
 
         $constraints($relation);
 
-        // Once we have the results, we just match those back up to their parent models
-        // using the relationship instance. Then we just return the finished arrays
-        // of models which have been eagerly hydrated and are readied for return.
-        return $relation->match(
-            $relation->initRelation($models, $name),
-            $relation->getEager(), $name
-        );
+        return $relation->getEager()->then(function (Collection $results) use ($name, $models, $relation) {
+            // Once we have the results, we just match those back up to their parent models
+            // using the relationship instance. Then we just return the finished arrays
+            // of models which have been eagerly hydrated and are readied for return.
+            return $relation->match(
+                $relation->initRelation($models, $name),
+                $results, $name
+            );
+        });
     }
 
     /**
@@ -670,17 +700,19 @@ class Builder
     {
         $results = $this->toBase()->pluck($column, $key);
 
-        // If the model has a mutator for the requested column, we will spin through
-        // the results and mutate the values so that the mutated version of these
-        // columns are returned as you would expect from these Eloquent models.
-        if (! $this->model->hasGetMutator($column) &&
-            ! $this->model->hasCast($column) &&
-            ! in_array($column, $this->model->getDates())) {
-            return $results;
-        }
+        return $results->then(function(\Illuminate\Support\Collection $results) use ($column) {
+            // If the model has a mutator for the requested column, we will spin through
+            // the results and mutate the values so that the mutated version of these
+            // columns are returned as you would expect from these Eloquent models.
+            if (! $this->model->hasGetMutator($column) &&
+                ! $this->model->hasCast($column) &&
+                ! in_array($column, $this->model->getDates())) {
+                return $results;
+            }
 
-        return $results->map(function ($value) use ($column) {
-            return $this->model->newFromBuilder([$column => $value])->{$column};
+            return $results->map(function ($value) use ($column) {
+                return $this->model->newFromBuilder([$column => $value])->{$column};
+            });
         });
     }
 
@@ -741,7 +773,7 @@ class Builder
      * Save a new model and return the instance.
      *
      * @param  array  $attributes
-     * @return \Illuminate\Database\Eloquent\Model|$this
+     * @return Model|$this
      */
     public function create(array $attributes = [])
     {
@@ -754,7 +786,7 @@ class Builder
      * Save a new model and return the instance. Allow mass-assignment.
      *
      * @param  array  $attributes
-     * @return \Illuminate\Database\Eloquent\Model|$this
+     * @return Model|$this
      */
     public function forceCreate(array $attributes)
     {
@@ -1066,7 +1098,7 @@ class Builder
      * Create a new instance of the model being queried.
      *
      * @param  array  $attributes
-     * @return \Illuminate\Database\Eloquent\Model|static
+     * @return Model|static
      */
     public function newModelInstance($attributes = [])
     {
@@ -1219,7 +1251,7 @@ class Builder
     /**
      * Get the model instance being queried.
      *
-     * @return \Illuminate\Database\Eloquent\Model|static
+     * @return Model|static
      */
     public function getModel()
     {
@@ -1229,7 +1261,7 @@ class Builder
     /**
      * Set a model instance for the model being queried.
      *
-     * @param  \Illuminate\Database\Eloquent\Model  $model
+     * @param Model $model
      * @return $this
      */
     public function setModel(Model $model)

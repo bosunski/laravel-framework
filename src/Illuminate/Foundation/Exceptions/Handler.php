@@ -187,6 +187,8 @@ class Handler implements ExceptionHandlerContract
             return $this->convertValidationExceptionToResponse($e, $request);
         }
 
+        return $this->prepareJsonResponse($request, $e);
+
         return $request->expectsJson()
                         ? $this->prepareJsonResponse($request, $e)
                         : $this->prepareResponse($request, $e);

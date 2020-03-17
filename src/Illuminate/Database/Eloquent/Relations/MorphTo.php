@@ -138,7 +138,9 @@ class MorphTo extends BelongsTo
      */
     protected function gatherKeysByType($type)
     {
-        return array_keys($this->dictionary[$type]);
+        return collect($this->dictionary[$type])->map(function ($models) {
+            return head($models)->{$this->foreignKey};
+        })->values()->unique()->all();
     }
 
     /**

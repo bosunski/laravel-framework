@@ -10,6 +10,7 @@ use Illuminate\Database\Query\Expression;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Traits\ForwardsCalls;
 use Illuminate\Support\Traits\Macroable;
+use React\Promise\PromiseInterface;
 
 /**
  * @mixin \Illuminate\Database\Eloquent\Builder
@@ -121,7 +122,7 @@ abstract class Relation
      * Match the eagerly loaded results to their parents.
      *
      * @param  array   $models
-     * @param  \Illuminate\Database\Eloquent\Collection  $results
+     * @param Collection $results
      * @param  string  $relation
      * @return array
      */
@@ -137,7 +138,7 @@ abstract class Relation
     /**
      * Get the relationship for eager loading.
      *
-     * @return \Illuminate\Database\Eloquent\Collection
+     * @return PromiseInterface<Collection>
      */
     public function getEager()
     {
@@ -148,7 +149,7 @@ abstract class Relation
      * Execute the query as a "select" statement.
      *
      * @param  array  $columns
-     * @return \Illuminate\Database\Eloquent\Collection
+     * @return PromiseInterface<Collection>
      */
     public function get($columns = ['*'])
     {

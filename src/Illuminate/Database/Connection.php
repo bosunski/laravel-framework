@@ -17,6 +17,14 @@ use Illuminate\Support\Arr;
 use LogicException;
 use PDO;
 use PDOStatement;
+use React\EventLoop\LoopInterface;
+use React\MySQL\Factory;
+use React\MySQL\QueryResult;
+use React\Promise\Deferred;
+use React\Promise\Promise;
+use React\Promise\PromiseInterface;
+use Throwable;
+use function React\Promise\resolve;
 
 class Connection implements ConnectionInterface
 {
@@ -27,14 +35,14 @@ class Connection implements ConnectionInterface
     /**
      * The active PDO connection.
      *
-     * @var \PDO|\Closure
+     * @var \PDO|Closure
      */
     protected $pdo;
 
     /**
      * The active PDO connection used for reads.
      *
-     * @var \PDO|\Closure
+     * @var \PDO|Closure
      */
     protected $readPdo;
 
@@ -153,7 +161,7 @@ class Connection implements ConnectionInterface
     /**
      * Create a new database connection instance.
      *
-     * @param  \PDO|\Closure     $pdo
+     * @param  \PDO|Closure|\React\MySQL\ConnectionInterface     $pdo
      * @param  string   $database
      * @param  string   $tablePrefix
      * @param  array    $config
@@ -257,7 +265,7 @@ class Connection implements ConnectionInterface
     /**
      * Begin a fluent query against a database table.
      *
-     * @param  \Closure|\Illuminate\Database\Query\Builder|string  $table
+     * @param Closure|\Illuminate\Database\Query\Builder|string  $table
      * @param  string|null  $as
      * @return \Illuminate\Database\Query\Builder
      */
@@ -298,7 +306,7 @@ class Connection implements ConnectionInterface
      *
      * @param  string  $query
      * @param  array   $bindings
-     * @return array
+     * @return PromiseInterface
      */
     public function selectFromWriteConnection($query, $bindings = [])
     {
@@ -308,30 +316,24 @@ class Connection implements ConnectionInterface
     /**
      * Run a select statement against the database.
      *
-     * @param  string  $query
-     * @param  array  $bindings
-     * @param  bool  $useReadPdo
-     * @return array
+     * @param string $query
+     * @param array $bindings
+     * @param bool $useReadPdo
+     * @return PromiseInterface
      */
     public function select($query, $bindings = [], $useReadPdo = true)
     {
         return $this->run($query, $bindings, function ($query, $bindings) use ($useReadPdo) {
             if ($this->pretending()) {
-                return [];
+                return resolve([]);
             }
 
             // For select statements, we'll simply execute the query and return an array
             // of the database result set. Each element in the array will be a single
             // row from the database table, and will either be an array or objects.
-            $statement = $this->prepared($this->getPdoForSelect($useReadPdo)
-                              ->prepare($query));
 
-            $this->bindValues($statement, $this->prepareBindings($bindings));
-
-            $statement->execute();
-
-            return $statement->fetchAll();
-        });
+                return $this->getPdo()->query($query, $bindings);
+            });
     }
 
     /**
@@ -417,7 +419,7 @@ class Connection implements ConnectionInterface
      *
      * @param  string  $query
      * @param  array   $bindings
-     * @return int
+     * @return PromiseInterface<int>
      */
     public function update($query, $bindings = [])
     {
@@ -429,7 +431,7 @@ class Connection implements ConnectionInterface
      *
      * @param  string  $query
      * @param  array   $bindings
-     * @return int
+     * @return PromiseInterface<int>
      */
     public function delete($query, $bindings = [])
     {
@@ -450,13 +452,9 @@ class Connection implements ConnectionInterface
                 return true;
             }
 
-            $statement = $this->getPdo()->prepare($query);
-
-            $this->bindValues($statement, $this->prepareBindings($bindings));
-
             $this->recordsHaveBeenModified();
 
-            return $statement->execute();
+            return $this->getPdo()->query($query, $bindings);
         });
     }
 
@@ -465,7 +463,7 @@ class Connection implements ConnectionInterface
      *
      * @param  string  $query
      * @param  array   $bindings
-     * @return int
+     * @return PromiseInterface<int>
      */
     public function affectingStatement($query, $bindings = [])
     {
@@ -477,17 +475,18 @@ class Connection implements ConnectionInterface
             // For update or delete statements, we want to get the number of rows affected
             // by the statement and return that back to the developer. We'll first need
             // to execute the statement and then we'll use PDO to fetch the affected.
-            $statement = $this->getPdo()->prepare($query);
 
-            $this->bindValues($statement, $this->prepareBindings($bindings));
+            return $this->getPdo()->query($query, $bindings)->then(function (QueryResult $result) {
+                if ($this->pretending()) {
+                    return 0;
+                }
 
-            $statement->execute();
+                $this->recordsHaveBeenModified(
+                    ($count = $result->affectedRows) > 0
+                );
 
-            $this->recordsHaveBeenModified(
-                ($count = $statement->rowCount()) > 0
-            );
-
-            return $count;
+                return $count;
+            });
         });
     }
 
@@ -504,18 +503,22 @@ class Connection implements ConnectionInterface
                 return true;
             }
 
-            $this->recordsHaveBeenModified(
-                $change = $this->getPdo()->exec($query) !== false
-            );
+            global $connection;
 
-            return $change;
+            return $connection->query($query)->then(function (QueryResult $result) {
+                $this->recordsHaveBeenModified(
+                    $change = $result->affectedRows !== null
+                );
+
+                return $change;
+            });
         });
     }
 
     /**
      * Execute the given callback in "dry run" mode.
      *
-     * @param  \Closure  $callback
+     * @param Closure $callback
      * @return array
      */
     public function pretend(Closure $callback)
@@ -537,7 +540,7 @@ class Connection implements ConnectionInterface
     /**
      * Execute the given callback in "dry run" mode.
      *
-     * @param  \Closure  $callback
+     * @param Closure $callback
      * @return array
      */
     protected function withFreshQueryLog($callback)
@@ -607,10 +610,10 @@ class Connection implements ConnectionInterface
      *
      * @param  string    $query
      * @param  array     $bindings
-     * @param  \Closure  $callback
+     * @param Closure $callback
      * @return mixed
      *
-     * @throws \Illuminate\Database\QueryException
+     * @throws PromiseInterface<\Illuminate\Database\QueryException>
      */
     protected function run($query, $bindings, Closure $callback)
     {
@@ -618,25 +621,32 @@ class Connection implements ConnectionInterface
 
         $start = microtime(true);
 
-        // Here we will run this query. If an exception occurs we'll determine if it was
-        // caused by a connection that has been lost. If that is the cause, we'll try
-        // to re-establish connection and re-run the query with a fresh connection.
-        try {
-            $result = $this->runQueryCallback($query, $bindings, $callback);
-        } catch (QueryException $e) {
-            $result = $this->handleQueryException(
-                $e, $query, $bindings, $callback
-            );
-        }
+        return new Promise(function ($resolve, $reject) use ($start, $callback, $bindings, $query) {
+            // Here we will run this query. If an exception occurs we'll determine if it was
+            // caused by a connection that has been lost. If that is the cause, we'll try
+            // to re-establish connection and re-run the query with a fresh connection.
 
-        // Once we have run the query we will calculate the time that it took to run and
-        // then log the query, bindings, and execution time so we will report them on
-        // the event that the developer needs them. We'll log time in milliseconds.
-        $this->logQuery(
-            $query, $bindings, $this->getElapsedTime($start)
-        );
+            return $this->runQueryCallback($query, $bindings, $callback)->then(function (QueryResult $result) use ($start, $bindings, $query, $resolve) {
+                $resolve($result);
 
-        return $result;
+                // Once we have run the query we will calculate the time that it took to run and
+                // then log the query, bindings, and execution time so we will report them on
+                // the event that the developer needs them. We'll log time in milliseconds.
+
+                $this->logQuery(
+                    $query, $bindings, $this->getElapsedTime($start)
+                );
+            }, function (QueryException $e) use ($resolve, $start, $reject, $callback, $bindings, $query) {
+                $result = $this->handleQueryException(
+                    $e, $query, $bindings, $callback
+                );
+
+                var_dump($result);
+                exit;
+
+                $resolve($result);
+            });
+        });
     }
 
     /**
@@ -644,30 +654,30 @@ class Connection implements ConnectionInterface
      *
      * @param  string    $query
      * @param  array     $bindings
-     * @param  \Closure  $callback
-     * @return mixed
+     * @param Closure $callback
+     * @return PromiseInterface<mixed>
      *
      * @throws \Illuminate\Database\QueryException
      */
     protected function runQueryCallback($query, $bindings, Closure $callback)
     {
-        // To execute the statement, we'll simply call the callback, which will actually
-        // run the SQL against the PDO connection. Then we can calculate the time it
-        // took to execute and log the query SQL, bindings and time in our memory.
-        try {
-            $result = $callback($query, $bindings);
-        }
+        return new Promise(function ($resolve, $reject) use ($bindings, $query, $callback) {
+            // To execute the statement, we'll simply call the callback, which will actually
+            // run the SQL against the connection and then RESOLVE the resolve. Then we can calculate the time it
+            // took to execute and log the query SQL, bindings and time in our memory.
+            $callback($query, $bindings)->then(function (QueryResult $result) use ($resolve) {
+                $resolve($result);
+            }, function (Exception $e) use ($bindings, $query, $reject) {
+                // If an exception occurs when attempting to run a query, we'll format the error
+                // message to include the bindings with SQL, which will make this exception a
+                // lot more helpful to the developer instead of just the database's errors.
+                // Then we REJECT the error into the EventLoop
 
-        // If an exception occurs when attempting to run a query, we'll format the error
-        // message to include the bindings with SQL, which will make this exception a
-        // lot more helpful to the developer instead of just the database's errors.
-        catch (Exception $e) {
-            throw new QueryException(
-                $query, $this->prepareBindings($bindings), $e
-            );
-        }
-
-        return $result;
+                $reject(
+                    new QueryException($query, $this->prepareBindings($bindings), $e)
+                );
+            });
+        });
     }
 
     /**
@@ -704,7 +714,7 @@ class Connection implements ConnectionInterface
      * @param  \Illuminate\Database\QueryException  $e
      * @param  string  $query
      * @param  array  $bindings
-     * @param  \Closure  $callback
+     * @param Closure $callback
      * @return mixed
      *
      * @throws \Illuminate\Database\QueryException
@@ -726,7 +736,7 @@ class Connection implements ConnectionInterface
      * @param  \Illuminate\Database\QueryException  $e
      * @param  string    $query
      * @param  array     $bindings
-     * @param  \Closure  $callback
+     * @param Closure $callback
      * @return mixed
      *
      * @throws \Illuminate\Database\QueryException
@@ -785,7 +795,7 @@ class Connection implements ConnectionInterface
     /**
      * Register a database query listener with the connection.
      *
-     * @param  \Closure  $callback
+     * @param Closure $callback
      * @return void
      */
     public function listen(Closure $callback)
@@ -912,7 +922,7 @@ class Connection implements ConnectionInterface
     /**
      * Get the current PDO connection.
      *
-     * @return \PDO
+     * @return \PDO|\React\MySQL\ConnectionInterface
      */
     public function getPdo()
     {
@@ -948,7 +958,7 @@ class Connection implements ConnectionInterface
     /**
      * Set the PDO connection.
      *
-     * @param  \PDO|\Closure|null  $pdo
+     * @param  \PDO|Closure|null  $pdo
      * @return $this
      */
     public function setPdo($pdo)
@@ -963,7 +973,7 @@ class Connection implements ConnectionInterface
     /**
      * Set the PDO connection used for reading.
      *
-     * @param  \PDO|\Closure|null  $pdo
+     * @param  \PDO|Closure|null  $pdo
      * @return $this
      */
     public function setReadPdo($pdo)
@@ -1244,7 +1254,7 @@ class Connection implements ConnectionInterface
      * Register a connection resolver.
      *
      * @param  string  $driver
-     * @param  \Closure  $callback
+     * @param Closure $callback
      * @return void
      */
     public static function resolverFor($driver, Closure $callback)

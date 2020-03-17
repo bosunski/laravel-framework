@@ -3,6 +3,7 @@
 namespace Illuminate\Database\Connectors;
 
 use PDO;
+use React\MySQL\ConnectionInterface;
 
 class MySqlConnector extends Connector implements ConnectorInterface
 {
@@ -10,7 +11,7 @@ class MySqlConnector extends Connector implements ConnectorInterface
      * Establish a database connection.
      *
      * @param  array  $config
-     * @return \PDO
+     * @return \PDO|ConnectionInterface
      */
     public function connect(array $config)
     {
@@ -23,18 +24,18 @@ class MySqlConnector extends Connector implements ConnectorInterface
         // connection's behavior, and some might be specified by the developers.
         $connection = $this->createConnection($dsn, $config, $options);
 
-        if (! empty($config['database'])) {
-            $connection->exec("use `{$config['database']}`;");
-        }
+//        if (! empty($config['database'])) {
+//            $connection->exec("use `{$config['database']}`;");
+//        }
 
-        $this->configureEncoding($connection, $config);
+//        $this->configureEncoding($connection, $config);
 
         // Next, we will check to see if a timezone has been specified in this config
         // and if it has we will issue a statement to modify the timezone with the
         // database. Setting this DB timezone is an optional configuration item.
         $this->configureTimezone($connection, $config);
 
-        $this->setModes($connection, $config);
+//        $this->setModes($connection, $config);
 
         return $connection;
     }
@@ -130,8 +131,8 @@ class MySqlConnector extends Connector implements ConnectorInterface
         extract($config, EXTR_SKIP);
 
         return isset($port)
-                    ? "mysql:host={$host};port={$port};dbname={$database}"
-                    : "mysql:host={$host};dbname={$database}";
+                    ? "{$host}:{$port}/{$database}"
+                    : "{$host}/{$database}";
     }
 
     /**

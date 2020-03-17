@@ -3,8 +3,15 @@
 namespace Illuminate\Database\Concerns;
 
 use Illuminate\Container\Container;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
+use React\MySQL\QueryResult;
+use React\Promise\Promise;
+use React\Promise\PromiseInterface;
 
 trait BuildsQueries
 {
@@ -136,11 +143,13 @@ trait BuildsQueries
      * Execute the query and get the first result.
      *
      * @param  array  $columns
-     * @return \Illuminate\Database\Eloquent\Model|object|static|null
+     * @return PromiseInterface<Model|object|static|null>
      */
     public function first($columns = ['*'])
     {
-        return $this->take(1)->get($columns)->first();
+        return $this->take(1)->get($columns)->then(function(Collection $result) {
+            return $result->first();
+        });
     }
 
     /**
@@ -166,7 +175,7 @@ trait BuildsQueries
      * Pass the query to a given callback.
      *
      * @param  callable  $callback
-     * @return \Illuminate\Database\Query\Builder
+     * @return Builder
      */
     public function tap($callback)
     {

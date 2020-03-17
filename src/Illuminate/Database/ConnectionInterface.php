@@ -3,6 +3,7 @@
 namespace Illuminate\Database;
 
 use Closure;
+use React\Promise\PromiseInterface;
 
 interface ConnectionInterface
 {
@@ -39,7 +40,7 @@ interface ConnectionInterface
      * @param  string  $query
      * @param  array   $bindings
      * @param  bool  $useReadPdo
-     * @return array
+     * @return array|PromiseInterface
      */
     public function select($query, $bindings = [], $useReadPdo = true);
 

@@ -6,6 +6,10 @@ use Doctrine\DBAL\Driver\PDOConnection;
 use Exception;
 use Illuminate\Database\DetectsLostConnections;
 use PDO;
+use React\EventLoop\LoopInterface;
+use React\MySQL\ConnectionInterface;
+use React\MySQL\Factory as ReactMySQLFactory;
+use React\Promise\PromiseInterface;
 use Throwable;
 
 class Connector
@@ -28,12 +32,13 @@ class Connector
     /**
      * Create a new PDO connection.
      *
-     * @param  string  $dsn
-     * @param  array   $config
-     * @param  array   $options
-     * @return \PDO
+     * @param string $dsn
+     * @param array $config
+     * @param array $options
+     * @return \PDO|ConnectionInterface
      *
-     * @throws \Exception
+     * @throws Exception
+     * @throws Throwable
      */
     public function createConnection($dsn, array $config, array $options)
     {
@@ -42,7 +47,7 @@ class Connector
         ];
 
         try {
-            return $this->createPdoConnection(
+            return $this->createAsyncConnection(
                 $dsn, $username, $password, $options
             );
         } catch (Exception $e) {
@@ -70,6 +75,13 @@ class Connector
         return new PDO($dsn, $username, $password, $options);
     }
 
+    protected function createAsyncConnection($dsn, $username, $password, $options)
+    {
+        $factory = new ReactMySQLFactory(app()->make(LoopInterface::class));
+        $dsn = sprintf("%s:%s@{$dsn}", $username, $password);
+        return $factory->createLazyConnection($dsn);
+    }
+
     /**
      * Determine if the connection is persistent.
      *
@@ -85,19 +97,21 @@ class Connector
     /**
      * Handle an exception that occurred during connect execution.
      *
-     * @param  \Throwable  $e
-     * @param  string  $dsn
-     * @param  string  $username
-     * @param  string  $password
-     * @param  array   $options
-     * @return \PDO
+     * @param \Throwable $e
+     * @param string $dsn
+     * @param string $username
+     * @param string $password
+     * @param array $options
+     * @return \PDO|ConnectionInterface
      *
-     * @throws \Exception
+     * @throws Exception
+     * @throws Throwable
      */
     protected function tryAgainIfCausedByLostConnection(Throwable $e, $dsn, $username, $password, $options)
     {
         if ($this->causedByLostConnection($e)) {
-            return $this->createPdoConnection($dsn, $username, $password, $options);
+            return $this->createAsyncConnection($dsn, $username, $password, $options);
+//            return $this->createPdoConnection($dsn, $username, $password, $options);
         }
 
         throw $e;

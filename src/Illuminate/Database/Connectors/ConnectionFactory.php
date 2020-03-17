@@ -2,6 +2,7 @@
 
 namespace Illuminate\Database\Connectors;
 
+use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\Connection;
 use Illuminate\Database\MySqlConnection;
@@ -37,7 +38,7 @@ class ConnectionFactory
      *
      * @param  array   $config
      * @param  string|null  $name
-     * @return \Illuminate\Database\Connection
+     * @return Connection
      */
     public function make(array $config, $name = null)
     {
@@ -66,7 +67,7 @@ class ConnectionFactory
      * Create a single database connection instance.
      *
      * @param  array  $config
-     * @return \Illuminate\Database\Connection
+     * @return Connection
      */
     protected function createSingleConnection(array $config)
     {
@@ -81,7 +82,7 @@ class ConnectionFactory
      * Create a single database connection instance.
      *
      * @param  array  $config
-     * @return \Illuminate\Database\Connection
+     * @return Connection
      */
     protected function createReadWriteConnection(array $config)
     {
@@ -222,10 +223,11 @@ class ConnectionFactory
     /**
      * Create a connector instance based on the configuration.
      *
-     * @param  array  $config
+     * @param array $config
      * @return \Illuminate\Database\Connectors\ConnectorInterface
      *
-     * @throws \InvalidArgumentException
+     * @throws InvalidArgumentException
+     * @throws BindingResolutionException
      */
     public function createConnector(array $config)
     {
@@ -240,12 +242,6 @@ class ConnectionFactory
         switch ($config['driver']) {
             case 'mysql':
                 return new MySqlConnector;
-            case 'pgsql':
-                return new PostgresConnector;
-            case 'sqlite':
-                return new SQLiteConnector;
-            case 'sqlsrv':
-                return new SqlServerConnector;
         }
 
         throw new InvalidArgumentException("Unsupported driver [{$config['driver']}]");
@@ -259,9 +255,9 @@ class ConnectionFactory
      * @param  string   $database
      * @param  string   $prefix
      * @param  array    $config
-     * @return \Illuminate\Database\Connection
+     * @return Connection
      *
-     * @throws \InvalidArgumentException
+     * @throws InvalidArgumentException
      */
     protected function createConnection($driver, $connection, $database, $prefix = '', array $config = [])
     {
@@ -272,12 +268,6 @@ class ConnectionFactory
         switch ($driver) {
             case 'mysql':
                 return new MySqlConnection($connection, $database, $prefix, $config);
-            case 'pgsql':
-                return new PostgresConnection($connection, $database, $prefix, $config);
-            case 'sqlite':
-                return new SQLiteConnection($connection, $database, $prefix, $config);
-            case 'sqlsrv':
-                return new SqlServerConnection($connection, $database, $prefix, $config);
         }
 
         throw new InvalidArgumentException("Unsupported driver [{$driver}]");
